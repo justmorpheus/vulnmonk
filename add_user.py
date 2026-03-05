@@ -11,10 +11,22 @@ Example:
 
 import sqlite3
 import sys
+import os
 from pathlib import Path
 from passlib.context import CryptContext
 
-DB_PATH = "vulnmonk.db"
+# Respect DATABASE_PATH env var (set in Docker to /data/vulnmonk.db)
+DB_PATH = os.getenv("DATABASE_PATH", "vulnmonk.db")
+
+def ensure_db():
+    """Create the DB file and schema if they don't exist yet."""
+    os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)), exist_ok=True)
+    # Reuse the backend's SQLAlchemy models so the schema is always in sync.
+    try:
+        from backend.database import init_db
+        init_db()
+    except Exception as e:
+        print(f"⚠️  Could not auto-initialize database via SQLAlchemy ({e}). Proceeding anyway.")
 
 def add_user(username, password, role="user"):
     """Add a new user to the database."""
@@ -32,26 +44,11 @@ def add_user(username, password, role="user"):
         print("❌ Error: Role must be 'admin' or 'user'")
         return False
     
-    if not Path(DB_PATH).exists():
-        print(f"❌ Error: Database file '{DB_PATH}' not found!")
-        print("   Run the backend server first to create the database, or run migrate_db.py")
-        return False
+    ensure_db()
     
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        
-        # Check if users table exists
-        cursor.execute("""
-            SELECT name FROM sqlite_master 
-            WHERE type='table' AND name='users'
-        """)
-        
-        if not cursor.fetchone():
-            print("❌ Error: Users table doesn't exist. Run migrate_db.py first:")
-            print("   python migrate_db.py")
-            conn.close()
-            return False
         
         # Check if username already exists
         cursor.execute("SELECT id FROM users WHERE username = ?", (username,))
@@ -107,9 +104,7 @@ def add_user(username, password, role="user"):
 
 def list_users():
     """List all users in the database."""
-    if not Path(DB_PATH).exists():
-        print(f"❌ Error: Database file '{DB_PATH}' not found!")
-        return False
+    ensure_db()
     
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -177,3 +172,4 @@ if __name__ == "__main__":
     else:
         print_usage()
         sys.exit(1)
+        
