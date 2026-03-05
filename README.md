@@ -33,21 +33,17 @@ npm start   # runs on http://localhost:3000
 docker compose up --build
 ```
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000/docs
-
 Data is persisted in Docker named volumes (`vulnmonk-data`, `vulnmonk-projects`).
 
 **`backend/.env`** is loaded automatically at runtime. Create it with:
 ```
-JWT_SECRET_KEY=<random-secret>
+JWT_SECRET_KEY=
 JWT_EXPIRE_DAYS=30
-CORS_ORIGINS=http://localhost:3000
 
 # GitHub OAuth (optional — needed for github integration)
-GITHUB_CLIENT_ID=<your-github-oauth-app-client-id>
-GITHUB_CLIENT_SECRET=<your-github-oauth-app-client-secret>
-GITHUB_REDIRECT_URI=http://localhost:3000/integrations
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+GITHUB_REDIRECT_URI=http://YOUR_SERVER_IP:3000/integrations
 ```
 
 Generate a secret key:
