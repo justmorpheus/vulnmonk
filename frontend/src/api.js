@@ -189,6 +189,12 @@ export async function updateExcludeRules(projectId, rules) {
     headers: getHeaders(),
     body: JSON.stringify(rules)
   });
+
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.detail || "Failed to update exclude rules");
+  }
+
   return res.json();
 }
 

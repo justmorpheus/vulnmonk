@@ -120,7 +120,7 @@ export default function Configurations({ user }) {
       const updatedProject = { ...selectedProject, exclude_rules: updatedRules.join(",") };
       setSelectedProject(updatedProject);
     } catch (error) {
-      setMessage({ type: "error", text: "Failed to add rule" });
+      setMessage({ type: "error", text: error.message || "Failed to add rule" });
     } finally {
       setSaving(false);
     }
@@ -207,7 +207,7 @@ export default function Configurations({ user }) {
       setNewGlobalExcludeRule("");
       setMessage({ type: "success", text: "Global exclude rule added successfully!" });
     } catch (error) {
-      setMessage({ type: "error", text: "Failed to add global rule" });
+      setMessage({ type: "error", text: error.message || "Failed to add global rule" });
     } finally {
       setSaving(false);
     }

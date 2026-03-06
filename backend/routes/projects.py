@@ -1,6 +1,7 @@
 import copy
 import json
 import os
+import re
 import subprocess
 import tempfile
 import uuid
@@ -155,7 +156,16 @@ def update_exclude_rules(
     project = crud.get_project(db, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
-    project.exclude_rules = ",".join(rules)
+
+    _EXCLUDE_RULE_RE = re.compile(r'^[a-z.\-]+$')
+    invalid = [r for r in rules if r and not _EXCLUDE_RULE_RE.match(r.strip())]
+    if invalid:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid exclude rules: {invalid}. Rules may only contain lowercase letters (a-z), '.', and '-'."
+        )
+
+    project.exclude_rules = ",".join(r.strip() for r in rules if r.strip())
     db.commit()
     db.refresh(project)
     return project
@@ -295,7 +305,10 @@ def trigger_scan(
         raise HTTPException(status_code=409, detail="Scan already in progress for this project")
 
     scanning_projects.add(project_id)
-    repo_name = project.github_url.rstrip("/").split("/")[-1].replace(".git", "")
+    # Derive repo name from stored URL — never from user input at scan time
+    raw_repo_name = project.github_url.rstrip("/").split("/")[-1].replace(".git", "")
+    # Sanitize: keep only alphanumeric and hyphens so the directory name is always safe
+    repo_name = re.sub(r'[^A-Za-z0-9\-]', '-', raw_repo_name)
     unique_id = str(uuid.uuid4())[:8]
     temp_path = os.path.join(PROJECTS_ROOT, f"temp-{repo_name}-{unique_id}")
 
@@ -506,6 +519,18 @@ def update_global_config(
     db: Session = Depends(get_db)
 ):
     value = payload.get("value", "")
+
+    if key == "global_exclude_rules" and value and value.strip():
+        _EXCLUDE_RULE_RE = re.compile(r'^[a-z.\-]+$')
+        invalid = [
+            r for r in value.split(",")
+            if r.strip() and not _EXCLUDE_RULE_RE.match(r.strip())
+        ]
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid exclude rules: {invalid}. Rules may only contain lowercase letters (a-z), '.', and '-'."
+            )
 
     if key == "global_include_rules_yaml" and value and value.strip():
         if not validate_yaml_content(value):

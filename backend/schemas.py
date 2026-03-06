@@ -1,6 +1,24 @@
-from pydantic import BaseModel
+import re
+from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from datetime import datetime
+
+# Validation patterns
+_USERNAME_RE = re.compile(r'^[A-Za-z0-9@.]+$')
+_EXCLUDE_RULE_RE = re.compile(r'^[a-z.\-]+$')
+_PROJECT_NAME_RE = re.compile(r'^[A-Za-z0-9/_-]+$')
+
+
+def validate_exclude_rules_str(value: str):
+    """Raise ValueError if any comma-separated rule contains invalid characters."""
+    for rule in value.split(","):
+        rule = rule.strip()
+        if rule and not _EXCLUDE_RULE_RE.match(rule):
+            raise ValueError(
+                f"Exclude rule '{rule}' is invalid. "
+                "Rules may only contain lowercase letters (a-z), '.', and '-'."
+            )
+    return value
 
 # User Schemas
 class UserBase(BaseModel):
@@ -9,6 +27,15 @@ class UserBase(BaseModel):
 class UserCreate(UserBase):
     password: str
     role: str = "user"
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not _USERNAME_RE.match(v):
+            raise ValueError(
+                "Username may only contain letters (A-Z, a-z), numbers, '@', and '.'"
+            )
+        return v
 
 class UserUpdate(BaseModel):
     role: Optional[str] = None
@@ -65,6 +92,28 @@ class ProjectCreate(BaseModel):
     apply_global_exclude: bool = False
     apply_global_include: bool = False
     integration_id: Optional[int] = None
+
+    @field_validator("github_url")
+    @classmethod
+    def validate_github_url(cls, v: str) -> str:
+        # Strip trailing slash and .git suffix, then extract org/repo segments
+        normalized = v.rstrip("/").removesuffix(".git")
+        parts = [p for p in normalized.split("/") if p and ":" not in p]
+        if len(parts) < 2:
+            raise ValueError("GitHub URL must include an org/repo path (e.g. https://github.com/org/repo)")
+        project_name = "/".join(parts[-2:])
+        if not _PROJECT_NAME_RE.match(project_name):
+            raise ValueError(
+                "Project name (org/repo) may only contain letters (A-Z, a-z), numbers, '/', and '-'"
+            )
+        return v
+
+    @field_validator("exclude_rules")
+    @classmethod
+    def validate_exclude_rules(cls, v: str) -> str:
+        if v:
+            validate_exclude_rules_str(v)
+        return v
 
 class Project(ProjectBase):
     id: int
