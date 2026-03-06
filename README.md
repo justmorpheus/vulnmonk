@@ -96,7 +96,7 @@ python3 view_db.py           # view database contents
 
 ## API Docs
 
-Swagger UI: http://localhost:8000/docs
+Swagger UI: http://YOUR_SERVER_IP_OR_DOMAIN:8000/docs
 
 ## Permissions
 
