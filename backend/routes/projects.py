@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 import os
 import re
@@ -57,15 +58,25 @@ def validate_yaml_content(yaml_content: str) -> bool:
 
 
 def generate_unique_key(finding):
-    """Generate unique key for a finding: path@line@rule-id"""
-    path = finding.get("path", "unknown")
-    line = (
-        finding.get("start", {}).get("line", 0)
-        if isinstance(finding.get("start"), dict)
-        else finding.get("line", 0)
-    )
+    """Generate unique key for a finding: path@rule_id@content_hash.
+
+    Uses a hash of the matched code snippet instead of the line number so that
+    the key remains stable even when new code is inserted above the finding
+    (which would otherwise shift line numbers and break existing FP records).
+    """
+    path    = finding.get("path", "unknown")
     rule_id = finding.get("check_id", "unknown")
-    return f"{path}@{line}@{rule_id}"
+
+    extra   = finding.get("extra", {})
+    lines   = extra.get("lines", "") if isinstance(extra, dict) else ""
+
+    # Normalise whitespace so minor formatting/indentation changes don't bust
+    # the key, but actual code changes (fixing the vuln) will produce a new key.
+    normalized = re.sub(r'\s+', ' ', lines.strip())
+
+    content_hash = hashlib.sha256(normalized.encode()).hexdigest()[:16]
+
+    return f"{path}@{rule_id}@{content_hash}"
 
 
 def process_scan_findings(scan_result, project_id, db):
