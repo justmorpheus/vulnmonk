@@ -1,12 +1,13 @@
 # VulnMonk SAST Dashboard
 
-A full-stack dashboard for managing SAST scan results across GitHub repositories.
+A full-stack dashboard for managing SAST scan results and secret scanning across GitHub repositories.
 
 ## Tech Stack
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy, SQLite, JWT auth
 - **Frontend:** React 19, JavaScript, CSS
-- **Scanner:** OpenGrep
+- **SAST Scanner:** OpenGrep
+- **Secret Scanner:** TruffleHog
 
 ## Setup
 
@@ -38,6 +39,8 @@ CORS_ORIGINS=http://localhost:3000
 
 > **GitHub App setup:** Create a GitHub App at https://github.com/settings/apps. Set the Webhook URL to `YOUR_SERVER_URL/webhooks/github`. Download the private key `.pem` file and place it in the `backend/` directory.
 
+> **TruffleHog:** Required for secret scanning. Install from https://github.com/trufflesecurity/trufflehog or via `brew install trufflehog` on macOS. The Docker image installs TruffleHog automatically.
+
 ---
 
 ### Step 2 — Backend
@@ -47,6 +50,12 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r backend/requirements.txt
 uvicorn backend.main:app --reload      # runs on http://localhost:8000
 ```
+
+> **Scanners:** Make sure `opengrep` and `trufflehog` are on your `PATH` for local development.
+> - OpenGrep: https://github.com/opengrep/opengrep/releases/latest
+> - TruffleHog: `brew install trufflehog` (macOS) or https://github.com/trufflesecurity/trufflehog/releases/latest
+> 
+> Both are installed automatically in the Docker image.
 
 ### Step 3 — Frontend
 
@@ -108,28 +117,67 @@ python3 view_db.py           # view database contents
 
 Swagger UI: http://YOUR_SERVER_IP_OR_DOMAIN:8000/docs
 
+## Features
+
+- **SAST scanning** with OpenGrep — on-demand per project, with per-project and global exclude/include YAML rules
+- **Secret scanning** with TruffleHog — on-demand per project, with per-project and global exclude detector lists
+- **PR scan checks** — automatic SAST + TruffleHog scans on pull requests via GitHub App webhooks
+- **PR blocking** — fail the `vulnmonk/pr-scan` GitHub status check based on:
+  - SAST severity threshold (INFO / WARNING / ERROR)
+  - TruffleHog findings (Verified only, or all secrets)
+- **False positive management** — mark/unmark findings as false positives (keyed by path, rule/detector)
+- **Role-based access** — Admin (full control) and User (view-only)
+- **GitHub OAuth** — connect GitHub App for private repo access and PR webhooks
+- **Scan history** — per-project scan history with finding counts and timestamps
+
 ## Permissions
 
-| Action                       | Admin | User |
-|------------------------------|:-----:|:----:|
-| Trigger scans                | ✅    | ❌   |
-| Add / manage projects        | ✅    | ❌   |
-| Mark false positives         | ✅    | ❌   |
-| Manage users                 | ✅    | ❌   |
-| View projects & scan results | ✅    | ✅   |
-| Change own password          | ✅    | ✅   |
+| Action                             | Admin | User |
+|------------------------------------|:-----:|:----:|
+| Trigger SAST / secret scans        | ✅    | ❌   |
+| Add / manage projects              | ✅    | ❌   |
+| Mark false positives               | ✅    | ❌   |
+| Configure PR scan settings         | ✅    | ❌   |
+| Configure exclude rules/detectors  | ✅    | ❌   |
+| Manage users                       | ✅    | ❌   |
+| View projects & scan results       | ✅    | ✅   |
+| Change own password                | ✅    | ✅   |
 
 ## Project Structure
 
 ```
 vulnmonk/
-├── backend/       # FastAPI app (api.py, auth.py, crud.py, models.py, schemas.py)
+├── backend/
+│   ├── main.py         # FastAPI app entry point
+│   ├── models.py       # ORM models (projects, scans, TruffleHog results, PR checks)
+│   ├── schemas.py      # Pydantic schemas
+│   ├── crud.py         # Database operations
+│   ├── auth.py         # JWT auth helpers
+│   └── routes/
+│       ├── projects.py  # Project, SAST & TruffleHog scan endpoints
+│       ├── webhooks.py  # GitHub App webhook handler (PR scans)
+│       ├── auth.py      # Login / token endpoints
+│       └── integrations.py  # GitHub integration endpoints
 ├── frontend/      # React app (src/components/, App.js, api.js)
 ├── projects/      # Cloned repos (auto-created at runtime)
 ├── add_user.py    # CLI user management
 ├── view_db.py     # Database viewer
 └── vulnmonk.db    # SQLite database (auto-created)
 ```
+
+## Scanners
+
+### OpenGrep (SAST)
+
+Runs `opengrep` against the full repo clone. Per-project and global exclude/include rules are merged as YAML at scan time. Findings are stored with file, line, severity, and rule metadata. False positives are tracked by `path@rule_id`.
+
+### TruffleHog (Secret Scanning)
+
+Runs `trufflehog git file://{repo_path} --json` for on-demand scans. For PR scans, runs `trufflehog filesystem {scan_dir} --json` on the changed files only, then filters findings to the exact changed lines of the PR.
+
+- **Exclude detectors** — configure per-project or globally (e.g. `AWS`, `Npm`, `CloudflareApiToken`)
+- **False positives** — tracked by `path@raw_hash@detector`
+- **PR blocking** — configurable per-project and globally: block on Verified secrets only, or all secrets (verified + unverified)
 
 ## License
 
