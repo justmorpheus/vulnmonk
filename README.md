@@ -2,6 +2,8 @@
 
 A full-stack dashboard for managing SAST scan results and secret scanning across GitHub repositories.
 
+> **Security / deployment disclaimer:** VulnMonk is intended to be self-hosted. Deploy it only in a secured environment you control (private network/VPN, restricted inbound access, TLS, and strong credentials). This app may store scan outputs and connect to GitHub via a GitHub App that can access repositories—do not expose it directly to the public internet.
+
 ## Tech Stack
 
 - **Backend:** Python 3.12, FastAPI, SQLAlchemy, SQLite, JWT auth

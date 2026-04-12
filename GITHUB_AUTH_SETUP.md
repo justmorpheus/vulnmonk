@@ -1,5 +1,7 @@
 # GitHub App Setup
 
+> **Security reminder:** The webhook endpoint receives inbound requests from GitHub and the GitHub App can access repository contents. Set this up only on a secured host (TLS, restricted inbound access where possible) and keep your private key + webhook secret confidential.
+
 ## 1. Create the GitHub App
 
 Go to **GitHub → Settings → Developer settings → GitHub Apps → New GitHub App** and fill in:
