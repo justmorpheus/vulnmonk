@@ -51,8 +51,34 @@ def _ensure_admin_exists():
 def on_startup():
     database.init_db()
     _ensure_admin_exists()
+    _load_github_app_config_from_db()
     from .scheduler import start_scheduler
     start_scheduler()
+
+
+def _load_github_app_config_from_db():
+    """Override github_app runtime config with any credentials stored in the DB.
+
+    DB values take priority over env vars so that credentials saved via the UI
+    are always used even when the .env file still has old/empty values.
+    """
+    from .database import SessionLocal
+    from . import crud, github_app
+
+    db = SessionLocal()
+    try:
+        raw = crud.get_github_app_config_raw(db)
+        if any(raw.values()):
+            github_app.reload_config(
+                app_id=raw["app_id"],
+                slug=raw["slug"],
+                private_key_pem=raw["private_key_pem"],
+                webhook_secret=raw["webhook_secret"],
+            )
+    except Exception:
+        pass  # Non-fatal on startup — env-var config remains
+    finally:
+        db.close()
 
 
 @app.on_event("shutdown")

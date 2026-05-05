@@ -16,22 +16,39 @@ import requests
 from jose import jwt
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
-# ── Env vars set when you create your GitHub App ──────────────────────────────
-GITHUB_APP_ID = os.getenv("GITHUB_APP_ID", "")
+# ── Runtime config dict — populated from env at module load then optionally
+#    overridden from the database (see reload_config / reload_config_from_db).
+_config: dict = {
+    "app_id": "",
+    "private_key": None,  # cryptography RSAPrivateKey object or None
+    "webhook_secret": "",
+    "slug": "",
+}
 
-# Private key: value may be a file path (e.g. backend/vulnmonk.private-key.pem)
-# or a raw PEM string (with literal \n line separators).
-_raw_key = os.getenv("GITHUB_APP_PRIVATE_KEY", "")
 
-def _load_private_key():
-    """Return a cryptography RSAPrivateKey object, or None if not configured."""
-    if not _raw_key:
+def _parse_pem(pem_text: str):
+    """Parse RSAPrivateKey from a PEM string.  Returns None if empty."""
+    if not pem_text:
         return None
-    # If the value looks like a file path, read the PEM from disk.
-    candidate = _raw_key.strip()
+    pem_bytes = pem_text.strip().replace("\\n", "\n").encode()
+    try:
+        return load_pem_private_key(pem_bytes, password=None)
+    except Exception as e:
+        raise RuntimeError(f"Failed to parse GitHub App private key: {e}")
+
+
+def _load_private_key_from_env():
+    """Return a cryptography RSAPrivateKey from GITHUB_APP_PRIVATE_KEY env var.
+
+    The value may be a file path (e.g. backend/vulnmonk.private-key.pem)
+    or a raw/inline PEM string.
+    """
+    raw = os.getenv("GITHUB_APP_PRIVATE_KEY", "")
+    if not raw:
+        return None
+    candidate = raw.strip()
     if not candidate.startswith("-----"):
-        # Treat as a file path; resolve relative paths from the repo root
-        # (one directory above this file).
+        # Treat as a file path; resolve relative paths from the repo root.
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         pem_path = candidate if os.path.isabs(candidate) else os.path.join(base, candidate)
         try:
@@ -39,23 +56,49 @@ def _load_private_key():
                 pem_bytes = f.read()
         except OSError as e:
             raise RuntimeError(f"Could not read GITHUB_APP_PRIVATE_KEY file '{pem_path}': {e}")
-    else:
-        # Inline PEM — normalise literal \n escapes
-        pem_bytes = candidate.replace("\\n", "\n").encode()
-    try:
-        return load_pem_private_key(pem_bytes, password=None)
-    except Exception as e:
-        raise RuntimeError(f"Failed to parse GitHub App private key: {e}")
+        try:
+            return load_pem_private_key(pem_bytes, password=None)
+        except Exception as e:
+            raise RuntimeError(f"Failed to parse GitHub App private key from file: {e}")
+    return _parse_pem(candidate)
 
-GITHUB_APP_PRIVATE_KEY = _load_private_key()
 
-GITHUB_APP_WEBHOOK_SECRET = os.getenv("GITHUB_APP_WEBHOOK_SECRET", "")
-GITHUB_APP_SLUG = os.getenv("GITHUB_APP_SLUG", "")  # e.g. "vulnmonk"
+# ── Initialise from environment variables ────────────────────────────────────
+_config["app_id"] = os.getenv("GITHUB_APP_ID", "")
+_config["private_key"] = _load_private_key_from_env()
+_config["webhook_secret"] = os.getenv("GITHUB_APP_WEBHOOK_SECRET", "")
+_config["slug"] = os.getenv("GITHUB_APP_SLUG", "")
+
+
+def reload_config(
+    app_id: str = "",
+    slug: str = "",
+    private_key_pem: str = "",
+    webhook_secret: str = "",
+) -> None:
+    """Override runtime config with values (typically loaded from the database).
+
+    Only fields with a non-empty value are updated so that env-var defaults
+    remain in place for any field not yet configured via the UI.
+    """
+    if app_id:
+        _config["app_id"] = app_id
+    if slug:
+        _config["slug"] = slug
+    if webhook_secret:
+        _config["webhook_secret"] = webhook_secret
+    if private_key_pem:
+        _config["private_key"] = _parse_pem(private_key_pem)
 
 
 def is_configured() -> bool:
     """Return True if the minimum App credentials are present."""
-    return bool(GITHUB_APP_ID and GITHUB_APP_PRIVATE_KEY)
+    return bool(_config["app_id"] and _config["private_key"])
+
+
+def get_slug() -> str:
+    """Return the configured App slug."""
+    return _config["slug"]
 
 
 def get_app_jwt() -> str:
@@ -63,18 +106,19 @@ def get_app_jwt() -> str:
     Mint a short-lived JWT (10 min) signed with the App's RSA private key.
     Used to authenticate as the GitHub App itself.
     """
-    if not GITHUB_APP_PRIVATE_KEY:
+    pk = _config["private_key"]
+    if not pk:
         raise ValueError(
             "GITHUB_APP_PRIVATE_KEY is not set or could not be loaded. "
-            "Check that the value in .env is a valid PEM private key."
+            "Configure it in Settings → GitHub App Credentials or set it in .env."
         )
     now = int(time.time())
     payload = {
         "iat": now - 60,   # 1 min in the past to absorb clock skew
         "exp": now + 600,  # 10-minute window
-        "iss": GITHUB_APP_ID,
+        "iss": _config["app_id"],
     }
-    return jwt.encode(payload, GITHUB_APP_PRIVATE_KEY, algorithm="RS256")
+    return jwt.encode(payload, pk, algorithm="RS256")
 
 
 def get_installation_token(installation_id: int) -> str:
@@ -102,7 +146,7 @@ def verify_webhook_signature(body: bytes, sig_header: str) -> bool:
     Returns True if the signature is valid (or if no secret is configured,
     which allows unsigned local dev).
     """
-    secret = GITHUB_APP_WEBHOOK_SECRET
+    secret = _config["webhook_secret"]
     if not secret:
         return True  # dev / no-secret mode
     expected = "sha256=" + _hmac.new(
@@ -113,4 +157,4 @@ def verify_webhook_signature(body: bytes, sig_header: str) -> bool:
 
 def get_install_url() -> str:
     """URL that opens the GitHub App installation page for a new org/account."""
-    return f"https://github.com/apps/{GITHUB_APP_SLUG}/installations/new"
+    return f"https://github.com/apps/{_config['slug']}/installations/new"

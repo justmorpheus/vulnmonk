@@ -489,20 +489,82 @@ def get_pr_scan(db: Session, pr_scan_id: int):
 # ==================== SLACK CRUD ====================
 
 def get_slack_config(db: Session) -> dict:
-    """Return Slack config from GlobalConfiguration."""
+    """Return Slack config from GlobalConfiguration (webhook URL is masked)."""
     webhook = get_global_config(db, "slack_webhook_url")
     enabled = get_global_config(db, "slack_enabled")
+    webhook_url = webhook.value if webhook else ""
     return {
-        "webhook_url": webhook.value if webhook else "",
+        # Never return the real URL — only expose whether it is configured
+        "webhook_url": "",
+        "is_configured": bool(webhook_url),
         "enabled": (enabled.value == "1") if enabled else False,
     }
+
+
+def get_slack_webhook_url_raw(db: Session) -> str:
+    """Return the raw (unmasked) Slack webhook URL for internal use."""
+    webhook = get_global_config(db, "slack_webhook_url")
+    return webhook.value if webhook else ""
 
 
 def save_slack_config(db: Session, webhook_url: str, enabled: bool) -> dict:
     """Persist Slack config into GlobalConfiguration rows."""
     update_global_config(db, "slack_webhook_url", webhook_url or "")
     update_global_config(db, "slack_enabled", "1" if enabled else "0")
-    return {"webhook_url": webhook_url or "", "enabled": enabled}
+    return {
+        "webhook_url": "",
+        "is_configured": bool(webhook_url),
+        "enabled": enabled,
+    }
+
+
+# ==================== GITHUB APP CONFIG CRUD ====================
+
+_GITHUB_APP_KEYS = {
+    "app_id": "github_app_id",
+    "slug": "github_app_slug",
+    "private_key_pem": "github_app_private_key_pem",
+    "webhook_secret": "github_app_webhook_secret",
+}
+
+
+def get_github_app_config_raw(db: Session) -> dict:
+    """Return raw (unmasked) GitHub App config from DB (internal use only)."""
+    result = {}
+    for field, key in _GITHUB_APP_KEYS.items():
+        row = get_global_config(db, key)
+        result[field] = row.value if row else ""
+    return result
+
+
+def get_github_app_config(db: Session) -> dict:
+    """Return masked GitHub App config for API responses."""
+    raw = get_github_app_config_raw(db)
+    return {
+        "app_id": raw["app_id"],
+        "slug": raw["slug"],
+        "private_key_configured": bool(raw["private_key_pem"]),
+        "webhook_secret_configured": bool(raw["webhook_secret"]),
+    }
+
+
+def save_github_app_config(
+    db: Session,
+    app_id: str = None,
+    slug: str = None,
+    private_key_pem: str = None,
+    webhook_secret: str = None,
+) -> dict:
+    """Persist GitHub App credentials to GlobalConfiguration (only non-None fields updated)."""
+    if app_id is not None:
+        update_global_config(db, _GITHUB_APP_KEYS["app_id"], app_id.strip())
+    if slug is not None:
+        update_global_config(db, _GITHUB_APP_KEYS["slug"], slug.strip())
+    if private_key_pem is not None:
+        update_global_config(db, _GITHUB_APP_KEYS["private_key_pem"], private_key_pem.strip())
+    if webhook_secret is not None:
+        update_global_config(db, _GITHUB_APP_KEYS["webhook_secret"], webhook_secret.strip())
+    return get_github_app_config(db)
 
 
 def update_project_slack_notify(db: Session, project_id: int, enabled):

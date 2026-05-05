@@ -1,9 +1,9 @@
 import os
 
 import requests
-from fastapi import APIRouter, Body, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 
 from .. import crud, models, schemas, auth, github_app
 from ..database import get_db
@@ -17,10 +17,10 @@ def get_github_app_install_url(
     current_user: models.User = Depends(auth.get_current_active_admin)
 ):
     """Return the URL to install the GitHub App on an org or personal account."""
-    if not github_app.GITHUB_APP_SLUG:
+    if not github_app.get_slug():
         raise HTTPException(
-            status_code=500,
-            detail="GITHUB_APP_SLUG is not configured. Add it to your .env file.",
+            status_code=400,
+            detail="GITHUB_APP_SLUG is not configured. Save your GitHub App credentials first (App Slug field).",
         )
     return {"install_url": github_app.get_install_url()}
 
@@ -249,12 +249,88 @@ def save_slack_config(
     current_user: models.User = Depends(auth.get_current_active_admin),
     db: Session = Depends(get_db),
 ):
-    """Save Slack webhook URL and global enabled state (Admin only)."""
-    webhook_url = (payload.get("webhook_url") or "").strip()
+    """Save Slack webhook URL and global enabled state (Admin only).
+
+    If ``webhook_url`` is omitted or null the existing stored URL is preserved
+    so that the UI can update the toggle without inadvertently clearing the URL.
+    """
     enabled = bool(payload.get("enabled", False))
+
+    # Determine the URL to persist
+    if "webhook_url" not in payload or payload["webhook_url"] is None:
+        # Keep existing URL — only update enabled flag
+        existing = crud.get_slack_webhook_url_raw(db)
+        webhook_url = existing
+    else:
+        webhook_url = (payload["webhook_url"] or "").strip()
+
     if webhook_url and not webhook_url.startswith("https://hooks.slack.com/"):
         raise HTTPException(
             status_code=400,
             detail="webhook_url must be a valid Slack incoming webhook URL (https://hooks.slack.com/...)",
         )
     return crud.save_slack_config(db, webhook_url, enabled)
+
+
+# ==================== GITHUB APP CREDENTIALS ENDPOINTS ====================
+
+@router.get("/integrations/github-app/config")
+def get_github_app_config(
+    current_user: models.User = Depends(auth.get_current_active_admin),
+    db: Session = Depends(get_db),
+):
+    """Return masked GitHub App config (sensitive values are never returned)."""
+    return crud.get_github_app_config(db)
+
+
+@router.post("/integrations/github-app/config")
+async def save_github_app_config(
+    app_id: Optional[str] = Form(None),
+    slug: Optional[str] = Form(None),
+    webhook_secret: Optional[str] = Form(None),
+    private_key_file: Optional[UploadFile] = File(None),
+    current_user: models.User = Depends(auth.get_current_active_admin),
+    db: Session = Depends(get_db),
+):
+    """Save GitHub App credentials (Admin only).  Private key is uploaded as a .pem file.
+    
+    Only fields that are provided (non-empty) will be updated.
+    Sensitive values (private key, webhook secret) are stored but never returned.
+    """
+    private_key_pem: Optional[str] = None
+
+    if private_key_file and private_key_file.filename:
+        content = await private_key_file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="Uploaded private key file is empty.")
+        private_key_pem = content.decode("utf-8").strip()
+        # Basic validation: must look like a PEM key
+        if "-----BEGIN" not in private_key_pem:
+            raise HTTPException(
+                status_code=400,
+                detail="Uploaded file does not appear to be a valid PEM private key.",
+            )
+
+    # Treat empty-string form fields as "no change"
+    app_id_val = (app_id or "").strip() or None
+    slug_val = (slug or "").strip() or None
+    secret_val = (webhook_secret or "").strip() or None
+
+    result = crud.save_github_app_config(
+        db,
+        app_id=app_id_val,
+        slug=slug_val,
+        private_key_pem=private_key_pem,
+        webhook_secret=secret_val,
+    )
+
+    # Reload the runtime github_app module so it uses the newly saved credentials
+    raw = crud.get_github_app_config_raw(db)
+    github_app.reload_config(
+        app_id=raw["app_id"],
+        slug=raw["slug"],
+        private_key_pem=raw["private_key_pem"],
+        webhook_secret=raw["webhook_secret"],
+    )
+
+    return result

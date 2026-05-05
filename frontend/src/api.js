@@ -586,6 +586,31 @@ export async function saveSlackConfig({ webhook_url, enabled }) {
   return res.json();
 }
 
+// ==================== GITHUB APP CREDENTIALS ====================
+
+export async function getGitHubAppConfig() {
+  const res = await apiFetch(`${API_BASE}/integrations/github-app/config`, {
+    headers: getHeaders()
+  });
+  if (!res.ok) throw new Error("Failed to load GitHub App config");
+  return res.json();
+}
+
+export async function saveGitHubAppConfig(formData) {
+  // FormData upload — omit Content-Type so browser sets multipart boundary automatically
+  const token = getAuthToken();
+  const res = await apiFetch(`${API_BASE}/integrations/github-app/config`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || "Failed to save GitHub App config");
+  }
+  return res.json();
+}
+
 export async function getProjectSlackNotify(projectId) {
   const res = await apiFetch(`${API_BASE}/projects/${projectId}/slack-notify`, {
     headers: getHeaders()

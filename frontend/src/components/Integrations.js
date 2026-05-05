@@ -11,7 +11,9 @@ import {
   getGlobalPRCheckConfig,
   saveGlobalPRCheckConfig,
   getSlackConfig,
-  saveSlackConfig
+  saveSlackConfig,
+  getGitHubAppConfig,
+  saveGitHubAppConfig
 } from "../api";
 
 function Integrations() {
@@ -37,8 +39,18 @@ function Integrations() {
   const [savingPrEnabled, setSavingPrEnabled] = useState(false);
   const [slackWebhookUrl, setSlackWebhookUrl] = useState("");
   const [slackEnabled, setSlackEnabled] = useState(false);
+  const [slackIsConfigured, setSlackIsConfigured] = useState(false);
   const [savingSlack, setSavingSlack] = useState(false);
   const [toast, setToast] = useState(null); // { type: "success"|"error", text }
+
+  // GitHub App credentials state
+  const [ghAppId, setGhAppId] = useState("");
+  const [ghAppSlug, setGhAppSlug] = useState("");
+  const [ghPrivateKeyFile, setGhPrivateKeyFile] = useState(null);
+  const [ghWebhookSecret, setGhWebhookSecret] = useState("");
+  const [ghPrivateKeyConfigured, setGhPrivateKeyConfigured] = useState(false);
+  const [ghWebhookSecretConfigured, setGhWebhookSecretConfigured] = useState(false);
+  const [savingGhApp, setSavingGhApp] = useState(false);
 
   const loadUser = useCallback(async () => {
     try {
@@ -78,10 +90,23 @@ function Integrations() {
   const loadSlackConfig = useCallback(async () => {
     try {
       const cfg = await getSlackConfig();
-      setSlackWebhookUrl(cfg.webhook_url || "");
+      setSlackWebhookUrl(""); // never pre-fill the real URL
+      setSlackIsConfigured(cfg.is_configured || false);
       setSlackEnabled(cfg.enabled || false);
     } catch (error) {
       // Non-critical
+    }
+  }, []);
+
+  const loadGhAppConfig = useCallback(async () => {
+    try {
+      const cfg = await getGitHubAppConfig();
+      setGhAppId(cfg.app_id || "");
+      setGhAppSlug(cfg.slug || "");
+      setGhPrivateKeyConfigured(cfg.private_key_configured || false);
+      setGhWebhookSecretConfigured(cfg.webhook_secret_configured || false);
+    } catch (error) {
+      // Non-critical — may not be admin
     }
   }, []);
 
@@ -89,6 +114,7 @@ function Integrations() {
     loadUser();
     loadGlobalPrConfig();
     loadSlackConfig();
+    loadGhAppConfig();
 
     if (initialInstallationId) {
       // GitHub redirected back after App installation — strip the URL param and auto-sync
@@ -111,7 +137,7 @@ function Integrations() {
       loadIntegrations();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loadUser, loadIntegrations, loadGlobalPrConfig, loadSlackConfig, setSearchParams]);
+  }, [loadUser, loadIntegrations, loadGlobalPrConfig, loadSlackConfig, loadGhAppConfig, setSearchParams]);
 
   const handleRefresh = async () => {
     try {
@@ -361,12 +387,41 @@ function Integrations() {
     if (!isAdmin) return;
     setSavingSlack(true);
     try {
-      await saveSlackConfig({ webhook_url: slackWebhookUrl, enabled: slackEnabled });
+      // If the URL field is empty and a webhook is already configured,
+      // only save the enabled toggle (don't clear the existing URL)
+      const urlToSave = slackWebhookUrl.trim() || (slackIsConfigured ? undefined : "");
+      const result = await saveSlackConfig({ webhook_url: urlToSave, enabled: slackEnabled });
+      setSlackWebhookUrl(""); // clear after save — never display the real URL
+      setSlackIsConfigured(result.is_configured || false);
       addLog("success", "Slack settings saved");
     } catch (error) {
       addLog("error", "Failed to save Slack settings: " + error.message);
     } finally {
       setSavingSlack(false);
+    }
+  };
+
+  const handleSaveGhApp = async () => {
+    if (!isAdmin) return;
+    setSavingGhApp(true);
+    try {
+      const formData = new FormData();
+      if (ghAppId.trim()) formData.append("app_id", ghAppId.trim());
+      if (ghAppSlug.trim()) formData.append("slug", ghAppSlug.trim());
+      if (ghWebhookSecret.trim()) formData.append("webhook_secret", ghWebhookSecret.trim());
+      if (ghPrivateKeyFile) formData.append("private_key_file", ghPrivateKeyFile);
+
+      const result = await saveGitHubAppConfig(formData);
+      setGhPrivateKeyConfigured(result.private_key_configured || false);
+      setGhWebhookSecretConfigured(result.webhook_secret_configured || false);
+      // Clear sensitive inputs after save
+      setGhWebhookSecret("");
+      setGhPrivateKeyFile(null);
+      addLog("success", "GitHub App credentials saved successfully");
+    } catch (error) {
+      addLog("error", "Failed to save GitHub App credentials: " + error.message);
+    } finally {
+      setSavingGhApp(false);
     }
   };
 
@@ -428,7 +483,8 @@ function Integrations() {
             <button
               className="btn-primary github-connect-btn"
               onClick={handleInstallApp}
-              disabled={loading}
+              disabled={loading || !ghAppSlug}
+              title={!ghAppSlug ? "Save GitHub App credentials (App Slug) first" : ""}
             >
               {loading ? "Loading..." : "🔗 Install GitHub App"}
             </button>
@@ -447,24 +503,36 @@ function Integrations() {
       {isAdmin && integrations.length === 0 && !loading && (
         <div className="card" style={{ marginBottom: "20px", textAlign: "center", padding: "40px" }}>
           <div style={{ fontSize: "3rem", marginBottom: "20px" }}>📦</div>
-          <h3>Install the VulnMonk GitHub App</h3>
-          <p style={{ color: "#64748b", marginBottom: "8px" }}>
-            Install the GitHub App on your personal account or organization. GitHub will
-            automatically notify VulnMonk — no webhook or token setup needed.
-          </p>
-          <p style={{ color: "#64748b", marginBottom: "24px", fontSize: "0.9rem" }}>
-            After installing, click <strong>↻ Refresh</strong> to see your installation here.
-          </p>
-          <button
-            className="btn-primary"
-            onClick={handleInstallApp}
-            disabled={loading}
-            style={{ fontSize: "1.125rem", padding: "12px 32px" }}
-          >
-            Install GitHub App
-          </button>
+          {ghAppSlug ? (
+            <>
+              <h3>Install the VulnMonk GitHub App</h3>
+              <p style={{ color: "#64748b", marginBottom: "8px" }}>
+                Install the GitHub App on your personal account or organization. GitHub will
+                automatically notify VulnMonk — no webhook or token setup needed.
+              </p>
+              <p style={{ color: "#64748b", marginBottom: "24px", fontSize: "0.9rem" }}>
+                After installing, click <strong>↻ Refresh</strong> to see your installation here.
+              </p>
+              <button
+                className="btn-primary"
+                onClick={handleInstallApp}
+                disabled={loading}
+                style={{ fontSize: "1.125rem", padding: "12px 32px" }}
+              >
+                Install GitHub App
+              </button>
+            </>
+          ) : (
+            <>
+              <h3>Configure GitHub App Credentials First</h3>
+              <p style={{ color: "#64748b", marginBottom: "8px" }}>
+                Fill in your <strong>GitHub App Credentials</strong> below (App ID, Slug, Private Key, Webhook Secret)
+                then come back here to install the App on your account or organisation.
+              </p>
+            </>
+          )}
           <p style={{ fontSize: "0.8rem", color: "#94a3b8", marginTop: "16px" }}>
-            Requires a GitHub App to be registered and <code>GITHUB_APP_SLUG</code> set in the backend.
+            Requires a GitHub App to be registered and credentials saved below.
           </p>
         </div>
       )}
@@ -751,6 +819,118 @@ function Integrations() {
         </div>
       </div>
 
+      {/* GitHub App Credentials Card */}
+      {isAdmin && (
+        <div className="card" style={{ marginTop: "24px", padding: "20px 24px" }}>
+          <h3 style={{ margin: "0 0 4px", fontSize: "1rem", fontWeight: 700 }}>🔑 GitHub App Credentials</h3>
+          <p style={{ margin: "0 0 16px", fontSize: "0.85rem", color: "#6b7280" }}>
+            Configure your GitHub App credentials here instead of (or in addition to) environment variables.
+            Sensitive values are <strong>never displayed</strong> once saved — only whether they are configured.
+            The private key must be the <code>.pem</code> file downloaded from GitHub.
+          </p>
+
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", marginBottom: "16px" }}>
+            <div>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.88rem", marginBottom: "5px", color: "#374151" }}>
+                App ID
+              </label>
+              <input
+                type="text"
+                value={ghAppId}
+                onChange={e => setGhAppId(e.target.value)}
+                placeholder="e.g. 123456"
+                style={{
+                  width: "100%", padding: "8px 12px", border: "2px solid #e5e7eb",
+                  borderRadius: "6px", fontSize: "0.9rem", boxSizing: "border-box"
+                }}
+              />
+            </div>
+            <div>
+              <label style={{ display: "block", fontWeight: 600, fontSize: "0.88rem", marginBottom: "5px", color: "#374151" }}>
+                App Slug
+              </label>
+              <input
+                type="text"
+                value={ghAppSlug}
+                onChange={e => setGhAppSlug(e.target.value)}
+                placeholder="e.g. vulnmonk"
+                style={{
+                  width: "100%", padding: "8px 12px", border: "2px solid #e5e7eb",
+                  borderRadius: "6px", fontSize: "0.9rem", boxSizing: "border-box"
+                }}
+              />
+            </div>
+          </div>
+
+          <div style={{ marginBottom: "16px" }}>
+            <label style={{ display: "block", fontWeight: 600, fontSize: "0.88rem", marginBottom: "5px", color: "#374151" }}>
+              Private Key (.pem file)
+              {ghPrivateKeyConfigured && (
+                <span style={{
+                  marginLeft: "10px", fontSize: "0.78rem", padding: "2px 8px",
+                  background: "#dcfce7", color: "#15803d", borderRadius: "4px", fontWeight: 600
+                }}>
+                  ✓ Key configured
+                </span>
+              )}
+            </label>
+            <input
+              type="file"
+              accept=".pem,.key,text/plain"
+              onChange={e => setGhPrivateKeyFile(e.target.files[0] || null)}
+              style={{ display: "block", fontSize: "0.9rem", color: "#374151" }}
+            />
+            {ghPrivateKeyFile && (
+              <p style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "4px" }}>
+                Selected: {ghPrivateKeyFile.name}
+              </p>
+            )}
+            {ghPrivateKeyConfigured && !ghPrivateKeyFile && (
+              <p style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "4px" }}>
+                Upload a new file only if you want to replace the existing key.
+              </p>
+            )}
+          </div>
+
+          <div style={{ marginBottom: "20px" }}>
+            <label style={{ display: "block", fontWeight: 600, fontSize: "0.88rem", marginBottom: "5px", color: "#374151" }}>
+              Webhook Secret
+              {ghWebhookSecretConfigured && (
+                <span style={{
+                  marginLeft: "10px", fontSize: "0.78rem", padding: "2px 8px",
+                  background: "#dcfce7", color: "#15803d", borderRadius: "4px", fontWeight: 600
+                }}>
+                  ✓ Secret configured
+                </span>
+              )}
+            </label>
+            <input
+              type="password"
+              value={ghWebhookSecret}
+              onChange={e => setGhWebhookSecret(e.target.value)}
+              placeholder={ghWebhookSecretConfigured ? "Enter new secret to replace existing" : "Webhook secret from GitHub App settings"}
+              style={{
+                width: "100%", padding: "8px 12px", border: "2px solid #e5e7eb",
+                borderRadius: "6px", fontSize: "0.9rem", boxSizing: "border-box"
+              }}
+            />
+          </div>
+
+          <button
+            onClick={handleSaveGhApp}
+            disabled={savingGhApp || (!ghAppId.trim() && !ghAppSlug.trim() && !ghPrivateKeyFile && !ghWebhookSecret.trim())}
+            style={{
+              padding: "9px 22px", background: "#2563eb", color: "white",
+              border: "none", borderRadius: "6px",
+              cursor: (savingGhApp || (!ghAppId.trim() && !ghAppSlug.trim() && !ghPrivateKeyFile && !ghWebhookSecret.trim())) ? "not-allowed" : "pointer",
+              fontWeight: 600, fontSize: "0.9rem", opacity: (!ghAppId.trim() && !ghAppSlug.trim() && !ghPrivateKeyFile && !ghWebhookSecret.trim()) ? 0.5 : 1
+            }}
+          >
+            {savingGhApp ? "Saving…" : "Save Credentials"}
+          </button>
+        </div>
+      )}
+
       {/* Slack Notifications Card — always visible */}
       <div className="card" style={{ marginTop: "24px", padding: "20px 24px" }}>
         <h3 style={{ margin: "0 0 4px", fontSize: "1rem", fontWeight: 700 }}>🔔 Slack Notifications</h3>
@@ -763,12 +943,20 @@ function Integrations() {
         <div style={{ marginBottom: "16px" }}>
           <label style={{ display: "block", fontWeight: 600, fontSize: "0.9rem", marginBottom: "6px", color: "#374151" }}>
             Slack Webhook URL {!isAdmin && <span style={{ color: "#dc2626", fontSize: "0.8rem" }}>(Admin only)</span>}
+            {slackIsConfigured && (
+              <span style={{
+                marginLeft: "10px", fontSize: "0.78rem", padding: "2px 8px",
+                background: "#dcfce7", color: "#15803d", borderRadius: "4px", fontWeight: 600
+              }}>
+                ✓ Configured
+              </span>
+            )}
           </label>
           <input
             type="url"
             value={slackWebhookUrl}
             onChange={e => setSlackWebhookUrl(e.target.value)}
-            placeholder="https://hooks.slack.com/services/T.../B.../..."
+            placeholder={slackIsConfigured ? "Enter new URL to replace the existing webhook" : "https://hooks.slack.com/services/T.../B.../..."}
             disabled={!isAdmin}
             style={{
               width: "100%",
@@ -781,6 +969,11 @@ function Integrations() {
               cursor: isAdmin ? "text" : "not-allowed"
             }}
           />
+          {slackIsConfigured && !slackWebhookUrl && (
+            <p style={{ fontSize: "0.8rem", color: "#6b7280", marginTop: "4px" }}>
+              Webhook URL is set. Enter a new URL above to replace it, or leave blank to keep the existing one.
+            </p>
+          )}
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "12px", marginBottom: "16px" }}>

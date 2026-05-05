@@ -826,7 +826,8 @@ def get_all_global_configs(
         "global_include_rules_yaml": global_include.value if global_include else "",
         "global_trufflehog_exclude_detectors": global_th_exclude.value if global_th_exclude else "",
         "global_scheduled_scan_enabled": (global_sched.value == "1") if global_sched else False,
-        "slack_webhook_url": slack_cfg["webhook_url"],
+        "slack_webhook_url": "",  # masked — never expose the raw URL
+        "slack_is_configured": slack_cfg["is_configured"],
         "slack_enabled": slack_cfg["enabled"],
     }
 
